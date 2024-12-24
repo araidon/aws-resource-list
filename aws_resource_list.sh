@@ -1,9 +1,20 @@
 #!/bin/bash
-# 各種変数
+
+# Description
+# This script outputs a list of AWS resources in CSV format.
+# The following resources are output.
+# - EC2 instances
+# - EBS volumes
+# - RDS instances
+# - S3 buckets
+# The output file is compressed in a zip file.
+# The output file name is "resource_list_<accountid>_<date>.zip".
+
+# Variables
 VERSION="0.7.1" # version
 accountid=($(aws sts get-caller-identity --query 'Account' --output text))
 date=$(TZ=Asia/Tokyo date -d "yesterday" '+%Y-%m-%d')
-# outputfilename=resource_list_${accountid}_$(TZ=Asia/Tokyo date '+%Y%m%d_%H%M%S').csv
+
 outputfolder=resource_list_${accountid}_$(TZ=Asia/Tokyo date '+%Y%m%d_%H%M%S')
 temp_ec2file=${outputfolder}/temp_ec2.txt
 temp_ebsfile=${outputfolder}/temp_ebs.txt
@@ -13,28 +24,27 @@ output_ebsfile=${outputfolder}/list_ebs.csv
 output_rdsfile=${outputfolder}/list_rds.csv
 output_s3file=${outputfolder}/list_s3.csv
 
-# versionオプションが指定された場合、バージョン情報を出力して終了
+# If the version option is specified, output the version information and exit
 if [[ "$1" == "--version" ]]; then
     echo "AWS Resource List Script, version $VERSION"
     exit 0
 fi
 
-# 引数が設定されていたら、regionsを引数に設定
+# If arguments are set, set regions to the arguments
 if [ "$#" -gt 0 ]; then
     regions=("$@")
 else
     # All Regions
     regions=($(aws ec2 describe-regions --query Regions[*].RegionName --output text))
 fi
-echo "■対象リージョン: ${regions[@]}"
+echo "■Target Regions: ${regions[@]}"
 total_regions=${#regions[@]}
 
-# Outputファイルの初期化
-#echo -n > ${outputfilename}
-# Outputフォルダの作成
+
+# Create output folder
 mkdir -p ${outputfolder}
 
-# プログレスバー表示関数
+# Progress bar display function
 show_progress() {
     local current=$1
     local total=$2
@@ -59,19 +69,18 @@ show_progress() {
 }
 
 # EC2
-echo "■EC2 一覧取得中"
+echo "# EC2 information acquisition"
 for ((i = 0; i < total_regions; i++)); do
     region=${regions[$i]}
     show_progress $((i + 1)) $total_regions
 
     aws ec2 describe-instances --query 'Reservations[*].Instances[*].[Tags[?Key==`Name`].Value | [0], State.Name, InstanceType, PlatformDetails, Placement.AvailabilityZone, BlockDeviceMappings[0].Ebs.VolumeId]' --output json --region ${region} | jq -r '.[][] | @tsv' >>./${temp_ec2file}
-
 done
 sort -t $'\t' -k 6 ./${temp_ec2file} -o ./${temp_ec2file}
 echo ""
 
 # EBS
-echo "■EBS 一覧取得中"
+echo "# EBS information acquisition"
 for ((i = 0; i < total_regions; i++)); do
     region=${regions[$i]}
     show_progress $((i + 1)) $total_regions
@@ -82,22 +91,18 @@ done
 sort -t $'\t' -k 1 ./${temp_ebsfile} -o ./${temp_ebsfile}
 echo ""
 
-# EC2とEBSをマージ
-#echo "# EC2" >>./${outputfilename}
+# Merge EC2 and EBS Information
 echo "InstancsName,State,InstanceType,PlatformDetails,AvailabilityZone,Size,VolumeType,VolumeId" >>./${output_ec2file}
-## 外部結合(左)
+## Outer join (left)
 join -t $'\t' -a 1 -1 6 -2 1 ./${temp_ec2file} ./${temp_ebsfile} | awk -F $'\t' '{print $2 "," $3 "," $4 "," $5 "," $6 "," $7 "," $8 "," $1}' >>./${output_ec2file}
-#echo "" >>./${outputfilename}
 
-## 一致しない行を出力 = 拡張ボリューム
-#echo "# Non-root-Volumes of EBS" >>./${output_ebsfile}
+## Output unmatched lines = Extended volumes
 echo "VolumeId,Size,VolumeType,AvailabilityZone" >>./${output_ebsfile}
 join -t $'\t' -v 2 -1 6 -2 1 ./${temp_ec2file} ./${temp_ebsfile} | awk -F $'\t' '{print $1 "," $2 "," $3 "," $4}' >>./${output_ebsfile}
-#echo "" >>./${output_ebsfile}
 
 # RDS
-echo "■RDS 一覧取得中"
-#echo "# RDS" >>./${outputfilename}
+echo "# RDS information acquisition"
+
 echo "DBInstanceIdentifier, DBInstanceStatus, DBInstanceClass, Engine, EngineVersion, AvailabilityZone, MultiAZ, StorageType, AllocatedStorage" >>./${output_rdsfile}
 for ((i = 0; i < total_regions; i++)); do
     region=${regions[$i]}
@@ -107,31 +112,30 @@ done
 echo ""
 
 # S3
-echo "■S3 一覧取得中"
-#echo "# S3" >>./${outputfilename}
+echo "# S3 information acquisition"
 echo "BucketName,Region,Date,Size(Bytes)" >>./${output_s3file}
 aws s3 ls >./${temp_s3file}
 total_buckets=$(awk '{print $3}' "./${temp_s3file}" | wc -l)
 current_bucket=0
 
-# S3バケット数でループ
+# Loop through the number of S3 buckets
 awk '{print $3}' "./${temp_s3file}" | while read bucket_name; do
     # progress bar
     current_bucket=$((current_bucket + 1))
     show_progress $current_bucket $total_buckets
 
-    # S3バケットのリージョン名を取得
+    # Get the region name of the S3 bucket
     region=$(aws s3api get-bucket-location --bucket "$bucket_name" --query 'LocationConstraint' --output text)
     if [ "$region" == "None" ]; then
         region="ap-northeast-1"
     fi
 
-    # リージョンが対象リージョンに含まれていない場合はskip
+    # Skip if the region is not in the target regions
     if [[ ! " ${regions[@]} " =~ " ${region} " ]]; then
         continue
     fi
 
-    # CloudWatchからメトリクスを取得
+    # Get metrics from CloudWatch
     metrics=$(aws cloudwatch get-metric-statistics \
         --namespace AWS/S3 \
         --metric-name BucketSizeBytes \
@@ -152,7 +156,7 @@ awk '{print $3}' "./${temp_s3file}" | while read bucket_name; do
             | join(",")
         ')
 
-    # メトリクスが空の場合、バケット名とリージョン名だけをCSVに出力
+    # If metrics are empty, output only the bucket name and region to the CSV
     if [ -z "$metrics" ]; then
         echo "$bucket_name,$region,," >>"${output_s3file}"
     else
