@@ -1,11 +1,18 @@
 #!/bin/bash
 # 各種変数
+VERSION="0.7.0" # version
 accountid=($(aws sts get-caller-identity --query 'Account' --output text))
 date=$(TZ=Asia/Tokyo date -d "yesterday" '+%Y-%m-%d')
 outputfilename=resource_list_${accountid}_$(TZ=Asia/Tokyo date '+%Y%m%d_%H%M%S').csv
 temp_ec2file=list_ec2.txt
 temp_ebsfile=list_ebs.txt
 temp_s3file=list_s3.txt
+
+# versionオプションが指定された場合、バージョン情報を出力して終了
+if [[ "$1" == "--version" ]]; then
+    echo "AWS Resource List Script, version $VERSION"
+    exit 0
+fi
 
 # 引数が設定されていたら、regionsを引数に設定
 if [ "$#" -gt 0 ]; then
