@@ -1,3 +1,14 @@
+This script outputs a list of AWS resources in CSV format.
+The following resources are output.
+- EC2 instances
+- EBS volumes
+- RDS instances
+- S3 buckets
+
+The output file is compressed in a zip file.
+The output file name is "resource_list_<accountid>_<date>.zip".
+
+
 # AWSのEC2およびEBSリソースを一覧取得し、タブ区切り形式で出力するスクリプト
 
 AWS CloudShellでaws-resource-list.shをアップロードして実行することで取得できます。
